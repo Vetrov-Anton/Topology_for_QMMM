@@ -640,7 +640,7 @@ class QM:
         self.write_outputs()
 
 
-def rewrite_hsd(xyz_file,qm_charge,top_file='qm.top', ndx_file='qm.ndx', o_hsd='dftb_in.hsd', o_gro='qm_new.gro'):
+def rewrite_hsd(xyz_file,qm_charge,top_file='qm.top', ndx_file='qm.ndx', o_hsd='dftb_in.hsd', o_gro='qm_new.gro'): #Change coordinates in hsd from xyz_file(pdb, gro)
     qm_idx = []
     with open(ndx_file,'r') as f:
         for line in f:
