@@ -30,6 +30,7 @@ class QM:
         self.qmqm_bonds = []
         self.vs2 = []
         self.LA_indexes = []
+        self.pairs_nb = []
         self.extended = []
         self.breakable_bonds = {'CB':'CA', 'N':'CA', 'CA':'C', 'C':'CA'} #order is important: QM-MM !!!
         self.ions_and_sol = {'SOL','NA','CL'}
@@ -395,6 +396,33 @@ class QM:
                     self.o_qm_protein.bonds.append(bond5)
                     res_n += 1
                     atom_n += 1
+
+    def comp_13_14(self):
+        #compensation 1-3
+        atoms_13 = []
+        for angle in self.i_qm_protein.angles:
+            if (angle.atom1 in self.qm and angle.atom3 not in self.qm) or (angle.atom1 not in self.qm and angle.atom3 in self.qm):
+                #print(angle)
+                atoms_13.append((angle.atom1.idx,angle.atom3.idx))
+        for pair in atoms_13:
+            i = self.o_qm_protein.atoms[pair[0]]
+            j = self.o_qm_protein.atoms[pair[1]]
+            if i.charge != 0 and j.charge != 0:
+                self.pairs_nb.append([str(i.idx+1), str(j.idx+1), str(1), str(i.charge), str(-j.charge), str(0.0), str(0.0), ';comp 1-3']) ## -j.charge
+        #print(atoms_13)
+            #print(angle)
+        #compensation 1-4
+        atoms_14 = []
+        for d in self.i_qm_protein.dihedrals:
+            if (d.atom1 in self.qm and d.atom4 not in self.qm) or (d.atom1 not in self.qm and d.atom4 in self.qm):
+                #print(angle)
+                atoms_14.append((d.atom1.idx,d.atom4.idx))
+        for pair in atoms_14:
+            i = self.o_qm_protein.atoms[pair[0]]
+            j = self.o_qm_protein.atoms[pair[1]]
+            if i.charge != 0 and j.charge != 0:
+                self.pairs_nb.append([str(i.idx+1), str(j.idx+1), str(1), str(i.charge), str((0.8333-1)*j.charge), str(0.0), str(0.0), ';comp 1-4']) ## -j.charge
+
     
     def write_ndx(self):
         self.qm = self.o_qm_protein.view[self.qm_mask]
@@ -422,7 +450,7 @@ class QM:
                 print(atom.idx + 1,end = ' ', file=f) #start index 1
                 count += 1
             print('',file=f)
-            print('[ Water_and_ions ]', file=f)
+            print('[ water_and_ions ]', file=f)
             count = 0
             for atom in self.o_rest.atoms:
                 if count > 20:
@@ -430,7 +458,19 @@ class QM:
                     count = 0
                 print(atom.idx + len(self.o_qm_protein.atoms)+1,end = ' ', file=f)
                 count += 1 #start index 1
-            print('',file=f)\
+            print('',file=f)
+
+            print('[ all ]', file=f)
+            count = 0
+            for i in range(len(self.o_rest.atoms)+len(self.o_qm_protein.atoms)):
+                if count > 20:
+                    print('\n',end='',file=f)
+                    count = 0
+                print(i+1,end = ' ', file=f)
+                count += 1 
+            print('',file=f)
+
+
             
     def rewrite(self):
         main = []
@@ -451,11 +491,21 @@ class QM:
             print(' [ cmap ]',file=f)
             print(';  ai    aj    ak    al    am funct',file=f)
             print('',file=f)
+
             print(' [ virtual_sites2 ]',file=f)
             print(';  ai    aj    ak    funct            c0',file=f)
             col_widths = [max(len(row[i]) for row in self.vs2) for i in range(len(self.vs2[0]))]
             for row in self.vs2:
                 print('    '+'     '.join(f"{item:>{col_widths[i]}}" for i, item in enumerate(row)),file=f)
+            if self.pairs_nb:
+                print('',file=f)
+                print(' [ pairs_nb ]',file=f)
+                print(';  ai    aj    funct    qi    qj    V    W                ',file=f)
+                col_widths = [max(len(row[i]) for row in self.pairs_nb) for i in range(len(self.pairs_nb[0]))]
+                for row in self.pairs_nb:
+                    print('    '+'     '.join(f"{item:>{col_widths[i]}}" for i, item in enumerate(row)),file=f)
+            print('',file = f)
+
             for line in self.tail:
                 flag = True
                 for i in list(self.ions_and_sol):
@@ -618,7 +668,7 @@ class QM:
         with open(file_hsd, 'w') as hsd:
             hsd.write(txt)
 
-    def job(self,qm_aim_charge = 0, scheme = 'amber'):
+    def job(self,qm_aim_charge = 0, scheme = 'amber', comp_13_14 = False):
         self.determine_qm()
         self.calculate_charge_qm()
         self.redistribute_charge_from_qm_to_mm(aim_charge=qm_aim_charge)
@@ -637,10 +687,13 @@ class QM:
             self.RCD_redist()
         elif scheme == 'CS':
             self.CS_redist()
+        if comp_13_14:
+            self.comp_13_14()
         self.write_outputs()
 
 
-def rewrite_hsd(xyz_file,qm_charge,top_file='qm.top', ndx_file='qm.ndx', o_hsd='dftb_in.hsd', o_gro='qm_new.gro'): #Change coordinates in hsd from xyz_file(pdb, gro)
+
+def rewrite_hsd(xyz_file,qm_charge, ndx_file='qm.ndx', o_hsd='dftb_in.hsd', o_gro='qm_new.gro'): #Change coordinates in hsd from xyz_file(pdb, gro)
     qm_idx = []
     with open(ndx_file,'r') as f:
         for line in f:
@@ -652,44 +705,87 @@ def rewrite_hsd(xyz_file,qm_charge,top_file='qm.top', ndx_file='qm.ndx', o_hsd='
             idx = list(map(str, line.strip().split()))
             qm_idx += idx
     amber_mask = '@' + ','.join(qm_idx)
-    top = pmd.load_file(top_file, xyz = xyz_file)
+    top = pmd.load_file(xyz_file)
     qm = top.view[amber_mask]
-    print(qm.atoms)
-    type2element = {
-        "c3":"C","o":"O", "no":"N", 
-        "Br": "Br",
-        "C": "C", "CA": "C", "CB": "C", "CC": "C", "CK": "C", "CM": "C", "CN": "C", "CQ": "C", "CR": "C", "CT": "C", "CV": "C", "CW": "C", "C*": "C", "C0": "C",'CG':'C','CD1':'C',
-        "F": "F", "f": "F",
-        "H": "H", "HC": "H", "H1": "H", "H2": "H", "H3": "H", "HA": "H", "H4": "H", "H5": "H", "HO": "H", "HS": "H", "HW": "H","HP": "H",'HB1':'H','HB2':'H', 'HB3':'H',
-        "I": "I",
-        "fCa": "Ca",
-        "Cl": "Cl",
-        "Na": "Na",
-        "MG": "Mg",
-        "N": "N", "NA": "N", "NB": "N", "NC": "N", "N2": "N", "N3": "N", "N*": "N",
-        "O": "O", "OW": "O", "OH": "O", "OS": "O", "O2": "O",
-        "P": "P", "p5": "P",
-        "S": "S", "ss": "S",
-        "SH": "S",
-        "CU": "Cu",
-        "FE": "Fe",
-        "K": "K",
-        "Rb": "Rb",
-        "Cs": "Cs",
-        "OW_spc": "O", "OW_tip4pew": "O", "OW_tip4p": "O", "OW_tip5p": "O", 'OW_tip3pfb':'O',
-        "HW_spc": "H", "HW_tip4pew": "H", "HW_tip4p": "H", "HW_tip5p": "H", 'HW_tip3pfb':'H',
-        "Li": "Li",
-        "Zn": "Zn",
-        "LA": "H",
-        "ho": "H", "hn": "H", "hc": "H", "hx": "H", "h1": "H", "h2": "H", "ha": "H",
-        "o": "O", "oh": "O", "os": "O",
-        "c": "C", "c3": "C", "ca": "C",
-        "n": "N", "n4": "N", "gp5": "P", "gos": "O", "go": "O", "gc3": "C", "gh1": "H", "gca": "C", "gha": "H", "gno": "N", "ghc": "H",
-        "zl": "P", "zh": "O", "zi": "O", "zj": "O", "za": "C", "zb": "C", "zc": "C",
-        "zd": "C", "ze" : "C", "zf": "C", "zg": "N", "zk": "O",
-        "X1": "C", "X2": "C", "X3":"C", "X4":"C", "X5":"C", "X6":"C", "X7":"C","X8":"C","X9":"C","X10":"C","X11":"C","X12":"C","X13":"C","X14":"C","X15":"C","X16":"C",
-        "2C": "C", "CO": "C", "3C": "C", "dza": "C", "dzb": "C", "dze": "O", "dzd": "O", "dzf": "P", "dzc": "F", "dh1": "H", "dhc": "H"
-        }
+    name2element = atom_to_element = {
+    # PAR остаток (параоксон?)
+    'C1': 'C', 'C2': 'C', 'O1': 'O', 'P1': 'P', 'O2': 'O',
+    'O3': 'O', 'C3': 'C', 'C4': 'C', 'O4': 'O', 'C5': 'C',
+    'C6': 'C', 'C7': 'C', 'C8': 'C', 'C9': 'C', 'C10': 'C',
+    'N1': 'N', 'O5': 'O', 'O6': 'O', 'H1': 'H', 'H2': 'H',
+    'H3': 'H', 'H4': 'H', 'H5': 'H', 'H6': 'H', 'H7': 'H',
+    'H8': 'H', 'H9': 'H', 'H10': 'H', 'H11': 'H', 'H12': 'H',
+    'H13': 'H', 'H14': 'H',
+    
+    # VAL (валин)
+    'N': 'N', 'H': 'H', 'CA': 'C', 'HA': 'H', 'CB': 'C',
+    'HB': 'H', 'CG1': 'C', 'HG11': 'H', 'HG12': 'H', 'HG13': 'H',
+    'CG2': 'C', 'HG21': 'H', 'HG22': 'H', 'HG23': 'H', 'C': 'C',
+    'O': 'O',
+    
+    # GLN (глутамин)
+    'CG': 'C', 'HG1': 'H', 'HG2': 'H', 'CD': 'C', 'OE1': 'O',
+    'NE2': 'N', 'HE21': 'H', 'HE22': 'H',
+    
+    # LEU (лейцин)
+    'CD1': 'C', 'HD11': 'H', 'HD12': 'H', 'HD13': 'H',
+    'CD2': 'C', 'HD21': 'H', 'HD22': 'H', 'HD23': 'H',
+    
+    # GLU (глутаминовая кислота)
+    'OE2': 'O',  # есть как O1-
+    
+    # SER (серин)
+    'OG': 'O', 'HG': 'H',
+    
+    # PRO (пролин)
+    'CD': 'C', 'HD1': 'H', 'HD2': 'H', 'CG': 'C', 'HG1': 'H',
+    'HG2': 'H', 'CB': 'C', 'HB1': 'H', 'HB2': 'H', 'CA': 'C',
+    'HA': 'H', 'C': 'C', 'O': 'O',
+    
+    # LYS (лизин)
+    'CE': 'C', 'HE1': 'H', 'HE2': 'H', 'NZ': 'N', 'HZ1': 'H',
+    'HZ2': 'H', 'HZ3': 'H',
+    
+    # THR (треонин)
+    'OG1': 'O', 'HG1': 'H', 'CG2': 'C', 'HG21': 'H', 'HG22': 'H',
+    'HG23': 'H',
+    
+    # CYS (цистеин)
+    'SG': 'S',
+    
+    # TYR (тирозин)
+    'CE1': 'C', 'HE1': 'H', 'CZ': 'C', 'OH': 'O', 'HH': 'H',
+    'CE2': 'C', 'HE2': 'H', 'CD2': 'C', 'HD2': 'H',
+    
+    # TRP (триптофан)
+    'NE1': 'N', 'HE1': 'H', 'CE2': 'C', 'CZ2': 'C', 'HZ2': 'H',
+    'CH2': 'C', 'HH2': 'H', 'CZ3': 'C', 'HZ3': 'H', 'CE3': 'C',
+    'HE3': 'H', 'CD2': 'C',
+    
+    # ARG (аргинин)
+    'NE': 'N', 'HE': 'H', 'CZ': 'C', 'NH1': 'N', 'HH11': 'H',
+    'HH12': 'H', 'NH2': 'N', 'HH21': 'H', 'HH22': 'H',
+    
+    # ASP (аспарагиновая кислота)
+    'OD1': 'O', 'OD2': 'O',
+    
+    # ASN (аспарагин)
+    'ND2': 'N', 'HD21': 'H', 'HD22': 'H',
+    
+    # HIS (гистидин)
+    'ND1': 'N', 'CE1': 'C', 'HE1': 'H', 'NE2': 'N', 'HE2': 'H',
+    'CD2': 'C', 'HD2': 'H',
+    
+    # SOL (вода)
+    'OW': 'O', 'HW1': 'H', 'HW2': 'H',
+    
+    # XXX (неизвестный остаток с лантаном)
+    'LA': 'H',
+    
+    # дополнительные атомы из поздних SOL
+    'OD1': 'O', 'OD2': 'O',  # уже были
+    'OE2': 'O',  # уже была
+}
     MaxAngularMomentum = {
         'C': 'p', 'O': 'p', 'N': 'p', 'H': 's', 'P': 'd', 'S': 'd',
         'Br': 'd', 'Cl': 'd', 'F': 'p', 'Ca': 'p',
@@ -713,8 +809,7 @@ def rewrite_hsd(xyz_file,qm_charge,top_file='qm.top', ndx_file='qm.ndx', o_hsd='
         'Zn': -0.03,
     }
     skpath = "/home/domain/data/zlobin/dftb-par/3ob-3-1-ophyd/"
-
-    elements = list(set([type2element[atom.type] for atom in qm.atoms]))
+    elements = list(set([name2element[atom.name] for atom in qm.atoms]))
     #print(elements)
     txt = ''
     elements_str = ' '.join(elements)
@@ -722,10 +817,8 @@ def rewrite_hsd(xyz_file,qm_charge,top_file='qm.top', ndx_file='qm.ndx', o_hsd='
     xyz = top.coordinates
     i = 1
     for atom in qm.atoms:
-        if i in [91,160,92,161,108,109,107]:
-            print(i,atom.name,atom.idx+1)
         a_xyz = xyz[atom.idx]
-        element_index = elements.index(type2element[atom.type]) + 1
+        element_index = elements.index(name2element[atom.name]) + 1
         txt += f"{element_index}{a_xyz[0]:8.3f}{a_xyz[1]:8.3f}{a_xyz[2]:8.3f}\n"
         i+= 1
 
@@ -802,6 +895,3 @@ def rewrite_hsd(xyz_file,qm_charge,top_file='qm.top', ndx_file='qm.ndx', o_hsd='
     
 
     
-
-
-
